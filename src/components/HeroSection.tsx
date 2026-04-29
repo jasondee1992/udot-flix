@@ -17,11 +17,19 @@ export function HeroSection({
   onMoreInfo
 }: HeroSectionProps) {
   const previewSource = video.filePath ? `${video.filePath}#t=1` : null
+  const backdropSource = video.backdrop
 
   return (
     <section className="relative overflow-hidden">
       <div className="absolute inset-0 bg-slate-950">
-        {previewSource ? (
+        {backdropSource ? (
+          <img
+            src={backdropSource}
+            alt={video.title}
+            className="h-full w-full object-cover opacity-40"
+            aria-hidden="true"
+          />
+        ) : previewSource ? (
           <video
             src={previewSource}
             preload="metadata"
@@ -37,25 +45,21 @@ export function HeroSection({
       <div className="relative z-10 mx-auto flex min-h-[34rem] w-full max-w-[1600px] items-end px-4 pb-16 pt-16 sm:px-6 lg:px-8">
         <div className="max-w-3xl rounded-[28px] border border-white/10 bg-slate-950/35 p-6 shadow-[0_25px_80px_rgba(0,0,0,0.42)] backdrop-blur-2xl sm:p-8">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-300/80">
-            {hasLocalVideos ? 'Featured from movies folder' : 'Movies folder'}
+            {hasLocalVideos ? lastScanLabel : 'Movies folder'}
           </p>
 
           <h2 className="mt-3 text-4xl font-semibold leading-none text-white sm:text-6xl">
             {video.title}
           </h2>
 
-          <p className="mt-5 max-w-2xl text-sm leading-7 text-slate-300 sm:text-base">
-            {hasLocalVideos
-              ? `${video.description} ${lastScanLabel}.`
-              : 'Add supported video files to the movies folder in the project root.'}
-          </p>
-
           <div className="mt-5 flex flex-wrap items-center gap-3 text-sm text-slate-300">
             <span>{video.year}</span>
-            <span className="h-1 w-1 rounded-full bg-slate-500" />
-            <span>{video.duration}</span>
-            <span className="h-1 w-1 rounded-full bg-slate-500" />
-            <span>{video.extension}</span>
+            {video.duration ? (
+              <>
+                <span className="h-1 w-1 rounded-full bg-slate-500" />
+                <span>{video.duration}</span>
+              </>
+            ) : null}
           </div>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">

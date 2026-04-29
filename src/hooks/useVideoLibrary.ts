@@ -90,20 +90,22 @@ function decorateLocalVideo(video: ScannedVideoFile): VideoItem {
     fileName: video.fileName,
     title,
     filePath: video.filePath,
+    playbackPath: video.playbackPath,
     extension,
-    category: 'Local Videos',
+    category: '',
     year: addedAt ? new Date(addedAt).getFullYear().toString() : 'Local',
-    duration: video.duration ?? 'Duration pending',
+    duration: video.duration ?? '',
+    durationSeconds: video.durationSeconds ?? null,
     badge: extension,
-    description: `Ready to play from the movies folder: ${title}`,
-    thumbnail: video.filePath,
-    backdrop: video.filePath,
+    description: '',
+    thumbnail: video.posterPath ?? video.filePath,
+    backdrop: video.posterPath ?? video.filePath,
     isLocal: true,
     progress: 0,
     resumeTime: 0,
     isFavorite: false,
     addedAt,
-    fileSize: formatBytes(video.sizeBytes)
+    fileSize: undefined
   }
 }
 

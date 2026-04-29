@@ -31,6 +31,12 @@ Open:
 http://127.0.0.1:1420/
 ```
 
+For another device on your home network, open:
+
+```text
+http://YOUR_LOCAL_IP:1420/
+```
+
 ## Production Mode Locally
 
 Build the app:
@@ -51,76 +57,53 @@ Open:
 http://127.0.0.1:1420/
 ```
 
-For smoother remote playback, use production mode instead of the Vite development server when testing through Tailscale Funnel.
+## Seeking And Range Streaming
 
-## Tailscale Funnel
+The app serves local videos with HTTP byte-range responses so the browser can jump directly to later timestamps instead of reading the movie from the beginning.
 
-With the app running on port `1420`, expose it through Tailscale:
+Expected behavior:
+
+- seeking to a far timestamp should trigger `206 Partial Content`
+- the browser should request byte ranges for the needed part of the file
+- the server streams only the requested chunk from disk
+
+You can verify this in the browser devtools network tab or with a manual request:
 
 ```powershell
-tailscale funnel 1420
+Invoke-WebRequest "http://127.0.0.1:1420/movies/YOUR_VIDEO.mp4" -Headers @{ Range = "bytes=1048576-2097151" } -UseBasicParsing
 ```
 
-Current allowed host:
+The response should include:
 
 ```text
-udot-1.taildca2a3.ts.net
+StatusCode: 206
+Accept-Ranges: bytes
+Content-Range: bytes START-END/TOTAL_SIZE
+Content-Length: CHUNK_SIZE
+Content-Type: video/mp4
 ```
 
-## Video Performance Notes
+## MP4 Faststart Optimization
 
-Videos are streamed with HTTP range requests so browsers can request only the bytes needed for playback and seeking.
+Some MP4 files are technically valid but still seek poorly because the metadata atom is not placed near the beginning of the file.
 
-Performance over Tailscale Funnel depends heavily on:
-
-- your desktop/laptop upload speed
-- Wi-Fi quality, or whether the server machine is on a LAN cable
-- the video bitrate and resolution
-- the video file size
-- mobile network quality
-- Tailscale Funnel routing
-- whether the file is browser-friendly, especially MP4/H.264/AAC
-- whether the video server receives and answers HTTP range requests
-
-Large high-bitrate files may still buffer on mobile connections even when range streaming is working correctly.
-
-## Recommended Video Format
-
-For best mobile/browser playback over Funnel, use:
-
-```text
-MP4 container
-H.264 video
-AAC audio
-720p or 1080p
-faststart enabled
-```
-
-MP4 fast start places playback metadata at the beginning of the file so browsers can start sooner:
-
-```text
--movflags +faststart
-```
-
-Optional ffmpeg command to make a 720p remote-streaming copy:
+Without re-encoding, you can optimize an MP4 like this:
 
 ```powershell
-ffmpeg -i "input.mkv" -vf "scale=-2:720" -c:v libx264 -preset slow -crf 23 -maxrate 3500k -bufsize 7000k -c:a aac -b:a 128k -movflags +faststart "output.720p.mp4"
+ffmpeg -i "input.mp4" -c copy -movflags +faststart "output-faststart.mp4"
 ```
 
-Optional 1080p version:
+Helper script:
 
 ```powershell
-ffmpeg -i "input.mkv" -vf "scale=-2:1080" -c:v libx264 -preset slow -crf 23 -maxrate 6000k -bufsize 12000k -c:a aac -b:a 160k -movflags +faststart "output.1080p.mp4"
+npm run videos:faststart -- "movies/Folder/Movie.mp4"
 ```
 
-If the video is already MP4/H.264/AAC and only needs faststart:
+Optional explicit output file:
 
 ```powershell
-ffmpeg -i "input.mp4" -c copy -movflags +faststart "output.faststart.mp4"
+npm run videos:faststart -- "movies/Folder/Movie.mp4" "movies/Folder/Movie.faststart.mp4"
 ```
-
-ffmpeg is optional. It is not required to start UdotFlix.
 
 ## Verify Range Streaming
 

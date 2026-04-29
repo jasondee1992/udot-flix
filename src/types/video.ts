@@ -5,10 +5,12 @@ export interface VideoItem {
   fileName: string
   title: string
   filePath?: string
+  playbackPath?: string
   extension: string
   category: string
   year: string
   duration: string
+  durationSeconds?: number | null
   badge: string
   description: string
   thumbnail: string
@@ -46,9 +48,12 @@ export interface ScannedVideoFile {
   fileName: string
   title: string
   filePath: string
+  playbackPath: string
+  posterPath?: string | null
   extension: string
   category: string
   duration?: string | null
+  durationSeconds?: number | null
   modifiedAt?: string | null
   sizeBytes: number
 }
