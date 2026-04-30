@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
+  Captions,
   HardDriveDownload,
   Info,
   LoaderCircle,
@@ -110,6 +111,8 @@ export function VideoPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [controlsVisible, setControlsVisible] = useState(true)
   const [isInfoOpen, setIsInfoOpen] = useState(false)
+  const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState<number | null>(null)
+  const [isSubtitleMenuOpen, setIsSubtitleMenuOpen] = useState(false)
   const [isScrubbing, setIsScrubbing] = useState(false)
   const [isSeekingMedia, setIsSeekingMedia] = useState(false)
   const [isBuffering, setIsBuffering] = useState(Boolean(autoplay))
@@ -131,6 +134,8 @@ export function VideoPlayer({
   const progressPercent = safeDuration ? Math.min((clampedCurrentTime / safeDuration) * 100, 100) : 0
   const volumePercent = Math.round((isMuted ? 0 : volume) * 100)
   const infoDuration = video.duration || formatTime(safeDuration)
+  const subtitleTracks = video.subtitles ?? []
+  const hasSubtitles = subtitleTracks.length > 0
   const closePlayback = useCallback(() => {
     const element = videoRef.current
     const progressTime = isTranscodedPlayback ? currentTime : element?.currentTime
@@ -157,8 +162,26 @@ export function VideoPlayer({
     setIsSeekingMedia(false)
     setControlsVisible(true)
     setIsInfoOpen(false)
+    setSelectedSubtitleIndex(null)
+    setIsSubtitleMenuOpen(false)
     setIsScrubbing(false)
   }, [autoplay, isTranscodedPlayback, metadataDuration, video.id, video.resumeTime])
+
+  useEffect(() => {
+    const element = videoRef.current
+
+    if (!element) {
+      return
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      Array.from(element.textTracks).forEach((track, index) => {
+        track.mode = selectedSubtitleIndex === index ? 'showing' : 'disabled'
+      })
+    })
+
+    return () => window.cancelAnimationFrame(frameId)
+  }, [selectedSubtitleIndex, subtitleTracks.length, video.id, videoSource])
 
   const markActivity = useCallback(() => {
     setControlsVisible(true)
@@ -359,6 +382,15 @@ export function VideoPlayer({
           event.preventDefault()
           toggleMute()
           break
+        case 'c':
+        case 'C':
+          if (hasSubtitles) {
+            event.preventDefault()
+            setSelectedSubtitleIndex((previous) => previous === null ? 0 : null)
+            setIsSubtitleMenuOpen(false)
+            markActivity()
+          }
+          break
         case 'Escape':
           event.preventDefault()
           if (document.fullscreenElement) {
@@ -380,7 +412,7 @@ export function VideoPlayer({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [adjustVolumeBy, closePlayback, isInfoOpen, seekBy, toggleFullscreen, toggleMute, togglePlayback])
+  }, [adjustVolumeBy, closePlayback, hasSubtitles, isInfoOpen, markActivity, seekBy, toggleFullscreen, toggleMute, togglePlayback])
 
   const volumeIcon = isMuted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2
   const VolumeIcon = volumeIcon
@@ -428,6 +460,10 @@ export function VideoPlayer({
                   setDuration(metadataDuration || elementDuration)
                   setVolume(currentTarget.volume)
                   setIsMuted(currentTarget.muted)
+
+                  Array.from(currentTarget.textTracks).forEach((track, index) => {
+                    track.mode = selectedSubtitleIndex === index ? 'showing' : 'disabled'
+                  })
 
                   if (isTranscodedPlayback) {
                     setCurrentTime(transcodeStartTime + currentTarget.currentTime)
@@ -536,7 +572,17 @@ export function VideoPlayer({
                     onSaveProgress(video.id, progressDuration, progressDuration, true)
                   }
                 }}
-              />
+              >
+                {subtitleTracks.map((subtitle) => (
+                  <track
+                    key={subtitle.url}
+                    kind="subtitles"
+                    src={subtitle.url}
+                    srcLang={subtitle.srcLang}
+                    label={subtitle.label}
+                  />
+                ))}
+              </video>
             </div>
 
             {isBuffering || isSeekingMedia ? (
@@ -691,6 +737,66 @@ export function VideoPlayer({
                   </div>
 
                   <div className="flex items-center justify-between gap-3 sm:justify-end">
+                    {hasSubtitles ? (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsSubtitleMenuOpen((previous) => !previous)
+                            markActivity()
+                          }}
+                          className={`inline-flex h-11 items-center gap-2 rounded-full border px-4 text-sm font-medium text-white backdrop-blur-xl transition ${
+                            selectedSubtitleIndex !== null
+                              ? 'border-red-300/45 bg-red-500/18'
+                              : 'border-white/10 bg-white/8 hover:border-red-300/35 hover:bg-red-500/12'
+                          }`}
+                          aria-haspopup="menu"
+                          aria-expanded={isSubtitleMenuOpen}
+                          aria-label="Subtitle options"
+                        >
+                          <Captions size={17} />
+                          <span>CC</span>
+                        </button>
+
+                        {isSubtitleMenuOpen ? (
+                          <div className="absolute bottom-14 right-0 w-48 overflow-hidden rounded-2xl border border-white/10 bg-black/82 p-1.5 text-sm text-white shadow-[0_22px_60px_rgba(0,0,0,0.48)] backdrop-blur-2xl">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedSubtitleIndex(null)
+                                setIsSubtitleMenuOpen(false)
+                                markActivity()
+                              }}
+                              className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left transition hover:bg-white/10 ${
+                                selectedSubtitleIndex === null ? 'text-red-200' : 'text-slate-100'
+                              }`}
+                            >
+                              <span>Off</span>
+                              {selectedSubtitleIndex === null ? <span className="text-xs">On</span> : null}
+                            </button>
+
+                            {subtitleTracks.map((subtitle, index) => (
+                              <button
+                                key={subtitle.url}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedSubtitleIndex(index)
+                                  setIsSubtitleMenuOpen(false)
+                                  markActivity()
+                                }}
+                                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left transition hover:bg-white/10 ${
+                                  selectedSubtitleIndex === index ? 'text-red-200' : 'text-slate-100'
+                                }`}
+                              >
+                                <span>{subtitle.label}</span>
+                                {selectedSubtitleIndex === index ? <span className="text-xs">On</span> : null}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
                     <button
                       type="button"
                       onClick={() => {

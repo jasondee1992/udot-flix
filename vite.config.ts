@@ -34,6 +34,12 @@ interface MediaMetadata {
   isBrowserPlayable: boolean
 }
 
+interface SubtitleTrack {
+  label: string
+  srcLang: string
+  url: string
+}
+
 function isInside(basePath: string, candidatePath: string) {
   const relativePath = path.relative(basePath, candidatePath)
   return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
@@ -153,6 +159,102 @@ function findPosterPath(videoPath: string) {
   return null
 }
 
+function getSubtitleLanguage(fileName: string) {
+  const normalized = path.parse(fileName).name.toLowerCase()
+  const parts = normalized.split(/[._\-\s]+/).filter(Boolean)
+  const lastPart = parts.at(-1) ?? ''
+
+  const languageMap: Record<string, { label: string; srcLang: string }> = {
+    en: { label: 'English', srcLang: 'en' },
+    eng: { label: 'English', srcLang: 'en' },
+    english: { label: 'English', srcLang: 'en' },
+    fil: { label: 'Filipino', srcLang: 'fil' },
+    filipino: { label: 'Filipino', srcLang: 'fil' },
+    ph: { label: 'Filipino', srcLang: 'fil' },
+    tagalog: { label: 'Filipino', srcLang: 'tl' },
+    tl: { label: 'Filipino', srcLang: 'tl' }
+  }
+
+  return languageMap[lastPart] ?? { label: 'Subtitle', srcLang: 'en' }
+}
+
+function findSubtitlePaths(videoPath: string) {
+  const parsedVideoPath = path.parse(videoPath)
+  const entries = fs.readdirSync(parsedVideoPath.dir, { withFileTypes: true })
+  const subtitlePaths = entries
+    .filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.srt')
+    .map((entry) => path.join(parsedVideoPath.dir, entry.name))
+    .sort((left, right) => {
+      const leftName = path.parse(left).name.toLowerCase()
+      const rightName = path.parse(right).name.toLowerCase()
+      const movieName = parsedVideoPath.name.toLowerCase()
+
+      if (leftName === movieName && rightName !== movieName) {
+        return -1
+      }
+
+      if (rightName === movieName && leftName !== movieName) {
+        return 1
+      }
+
+      return path.basename(left).localeCompare(path.basename(right))
+    })
+
+  return subtitlePaths
+}
+
+function buildSubtitleTracks(moviesRoot: string, videoPath: string): SubtitleTrack[] {
+  const videoRelativePath = path.relative(moviesRoot, videoPath)
+
+  return findSubtitlePaths(videoPath).map((subtitlePath, index) => {
+    const language = getSubtitleLanguage(path.basename(subtitlePath))
+
+    return {
+      label: language.label,
+      srcLang: language.srcLang,
+      url: `/api/subtitles?video=${encodeURIComponent(videoRelativePath)}&index=${index}`
+    }
+  })
+}
+
+function srtToVtt(srtContent: string) {
+  const normalized = srtContent
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim()
+
+  if (!normalized) {
+    return 'WEBVTT\n\n'
+  }
+
+  const cues = normalized
+    .split(/\n{2,}/)
+    .map((block) => {
+      const lines = block.split('\n').map((line) => line.trimEnd())
+
+      if (/^\d+$/.test(lines[0]?.trim() ?? '')) {
+        lines.shift()
+      }
+
+      const timingIndex = lines.findIndex((line) => line.includes('-->'))
+
+      if (timingIndex === -1) {
+        return null
+      }
+
+      lines[timingIndex] = lines[timingIndex].replace(
+        /(\d{2}:\d{2}:\d{2}),(\d{3})/g,
+        '$1.$2'
+      )
+
+      return lines.join('\n').trim()
+    })
+    .filter((cue): cue is string => Boolean(cue))
+
+  return `WEBVTT\n\n${cues.join('\n\n')}\n`
+}
+
 function scanMoviesFolder(moviesRoot: string) {
   if (!fs.existsSync(moviesRoot)) {
     return []
@@ -164,6 +266,9 @@ function scanMoviesFolder(moviesRoot: string) {
     title: string
     filePath: string
     playbackPath: string
+    hasSubtitle: boolean
+    subtitleUrl: string | null
+    subtitles: SubtitleTrack[]
     posterPath: string | null
     extension: string
     category: string
@@ -199,6 +304,7 @@ function scanMoviesFolder(moviesRoot: string) {
       const playbackPath = mediaMetadata.isBrowserPlayable
         ? webPath
         : `/api/transcode?path=${encodeURIComponent(path.relative(moviesRoot, entryPath))}`
+      const subtitles = buildSubtitleTracks(moviesRoot, entryPath)
 
       videos.push({
         id: webPath,
@@ -206,6 +312,9 @@ function scanMoviesFolder(moviesRoot: string) {
         title: getVideoTitle(entry.name),
         filePath: webPath,
         playbackPath,
+        hasSubtitle: subtitles.length > 0,
+        subtitleUrl: subtitles[0]?.url ?? null,
+        subtitles,
         posterPath: posterPath ? toWebPath(moviesRoot, posterPath) : null,
         extension: extension.slice(1),
         category: '',
@@ -471,6 +580,70 @@ function installMoviesMiddleware(server: ViteDevServer | PreviewServer) {
       response.setHeader('Content-Type', 'application/json')
       response.setHeader('Cache-Control', 'no-store')
       response.end(JSON.stringify(scanMoviesFolder(moviesRoot)))
+      return
+    }
+
+    if (requestUrl.pathname === '/api/subtitles') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        response.writeHead(405, {
+          Allow: 'GET, HEAD'
+        })
+        response.end('Method not allowed')
+        return
+      }
+
+      const relativeVideoPath = requestUrl.searchParams.get('video')
+      const subtitleIndex = Number(requestUrl.searchParams.get('index') ?? '0')
+
+      if (!relativeVideoPath || !Number.isInteger(subtitleIndex) || subtitleIndex < 0) {
+        response.writeHead(400)
+        response.end('Invalid subtitle request.')
+        return
+      }
+
+      const videoPath = path.resolve(moviesRoot, relativeVideoPath)
+      const videoExtension = path.extname(videoPath).toLowerCase()
+
+      if (
+        !isInside(moviesRoot, videoPath) ||
+        !supportedVideoExtensions.has(videoExtension) ||
+        !fs.existsSync(videoPath) ||
+        !fs.statSync(videoPath).isFile()
+      ) {
+        response.writeHead(404)
+        response.end('Not found')
+        return
+      }
+
+      const subtitlePath = findSubtitlePaths(videoPath)[subtitleIndex]
+
+      if (
+        !subtitlePath ||
+        !isInside(moviesRoot, subtitlePath) ||
+        path.extname(subtitlePath).toLowerCase() !== '.srt' ||
+        !fs.existsSync(subtitlePath) ||
+        !fs.statSync(subtitlePath).isFile()
+      ) {
+        response.writeHead(404)
+        response.end('Subtitle not found.')
+        return
+      }
+
+      const vttContent = srtToVtt(fs.readFileSync(subtitlePath, 'utf8'))
+      const contentLength = Buffer.byteLength(vttContent, 'utf8')
+
+      response.writeHead(200, {
+        'Cache-Control': 'private, no-cache',
+        'Content-Length': contentLength,
+        'Content-Type': 'text/vtt; charset=utf-8'
+      })
+
+      if (request.method === 'HEAD') {
+        response.end()
+        return
+      }
+
+      response.end(vttContent)
       return
     }
 

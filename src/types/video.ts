@@ -6,6 +6,9 @@ export interface VideoItem {
   title: string
   filePath?: string
   playbackPath?: string
+  hasSubtitle?: boolean
+  subtitleUrl?: string | null
+  subtitles?: SubtitleTrack[]
   extension: string
   category: string
   year: string
@@ -49,6 +52,9 @@ export interface ScannedVideoFile {
   title: string
   filePath: string
   playbackPath: string
+  hasSubtitle: boolean
+  subtitleUrl: string | null
+  subtitles: SubtitleTrack[]
   posterPath?: string | null
   extension: string
   category: string
@@ -56,6 +62,12 @@ export interface ScannedVideoFile {
   durationSeconds?: number | null
   modifiedAt?: string | null
   sizeBytes: number
+}
+
+export interface SubtitleTrack {
+  label: string
+  srcLang: string
+  url: string
 }
 
 export interface NavigationItem {

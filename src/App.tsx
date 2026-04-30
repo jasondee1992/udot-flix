@@ -41,21 +41,21 @@ function App() {
     }
 
     return (
-      <section className="space-y-6">
+      <section className="space-y-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
-              Local library
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-red-300">
+              Streaming now
             </p>
-            <h2 className="text-3xl font-semibold text-white">All Videos</h2>
+            <h2 className="text-2xl font-semibold text-white sm:text-3xl">All Videos</h2>
             <p className="max-w-3xl text-sm text-slate-300/80">{libraryHeading}</p>
           </div>
-          <p className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300">
+          <p className="w-fit rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs text-slate-300 shadow-[0_16px_36px_rgba(0,0,0,0.22)]">
             {filteredVideos.length} item{filteredVideos.length === 1 ? '' : 's'}
           </p>
         </div>
 
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="no-scrollbar grid auto-cols-[minmax(260px,340px)] grid-flow-col gap-4 overflow-x-auto pb-5 pt-1 sm:auto-cols-[minmax(300px,380px)]">
           {filteredVideos.map((video) => (
             <VideoCard
               key={video.id}
@@ -70,15 +70,14 @@ function App() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#04050c] text-slate-50">
+    <div className="relative min-h-screen overflow-hidden bg-[#050507] text-slate-50">
       <div className="pointer-events-none fixed inset-0">
-        <div className="absolute -left-28 top-0 h-80 w-80 rounded-full bg-cyan-500/20 blur-[120px]" />
-        <div className="absolute right-0 top-48 h-96 w-96 rounded-full bg-violet-600/18 blur-[140px]" />
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-blue-500/12 blur-[110px]" />
+        <div className="absolute left-0 top-0 h-[28rem] w-[36rem] bg-red-700/10 blur-[150px]" />
+        <div className="absolute right-0 top-32 h-[34rem] w-[34rem] bg-zinc-500/8 blur-[150px]" />
+        <div className="absolute inset-x-0 bottom-0 h-80 bg-gradient-to-t from-black/70 to-transparent" />
       </div>
 
       <Navbar
-        appName="UdotFlix"
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         isScanning={isScanning}
@@ -95,7 +94,7 @@ function App() {
           />
         ) : null}
 
-        <div className={`mx-auto w-full max-w-[1600px] px-4 sm:px-6 lg:px-8 ${featuredVideo ? '-mt-10' : 'pt-10'}`}>
+        <div className={`mx-auto w-full max-w-[1680px] px-4 sm:px-6 lg:px-10 ${featuredVideo ? '-mt-16' : 'pt-10'}`}>
           {errorMessage ? (
             <div className="mb-6 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100 backdrop-blur">
               {errorMessage}
