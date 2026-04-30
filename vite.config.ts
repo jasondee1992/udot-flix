@@ -217,7 +217,73 @@ function buildSubtitleTracks(moviesRoot: string, videoPath: string): SubtitleTra
   })
 }
 
-function srtToVtt(srtContent: string) {
+function parseSubtitleTimestamp(value: string) {
+  const match = value.trim().match(/^(\d+):([0-5]\d):([0-5]\d)[,.](\d{3})$/)
+
+  if (!match) {
+    return null
+  }
+
+  const [, hours, minutes, seconds, milliseconds] = match
+  return (
+    Number(hours) * 3600 +
+    Number(minutes) * 60 +
+    Number(seconds) +
+    Number(milliseconds) / 1000
+  )
+}
+
+function formatVttTimestamp(seconds: number) {
+  const totalMilliseconds = Math.max(0, Math.round(seconds * 1000))
+  const hours = Math.floor(totalMilliseconds / 3_600_000)
+  const minutes = Math.floor((totalMilliseconds % 3_600_000) / 60_000)
+  const remainingSeconds = Math.floor((totalMilliseconds % 60_000) / 1000)
+  const milliseconds = totalMilliseconds % 1000
+
+  return [
+    hours.toString().padStart(2, '0'),
+    minutes.toString().padStart(2, '0'),
+    remainingSeconds.toString().padStart(2, '0')
+  ].join(':') + `.${milliseconds.toString().padStart(3, '0')}`
+}
+
+function normalizeSubtitleOffset(offsetSeconds: number) {
+  return Number.isFinite(offsetSeconds) && offsetSeconds > 0 ? offsetSeconds : 0
+}
+
+function convertSrtTimingLine(line: string, offsetSeconds: number) {
+  const match = line.match(
+    /^\s*(\d+:[0-5]\d:[0-5]\d[,.]\d{3})\s*-->\s*(\d+:[0-5]\d:[0-5]\d[,.]\d{3})(.*)$/
+  )
+
+  if (!match) {
+    return line.replace(/(\d+:[0-5]\d:[0-5]\d),(\d{3})/g, '$1.$2')
+  }
+
+  const [, rawStart, rawEnd, settings] = match
+  const startSeconds = parseSubtitleTimestamp(rawStart)
+  const endSeconds = parseSubtitleTimestamp(rawEnd)
+
+  if (startSeconds === null || endSeconds === null) {
+    return line.replace(/(\d+:[0-5]\d:[0-5]\d),(\d{3})/g, '$1.$2')
+  }
+
+  if (endSeconds <= offsetSeconds) {
+    return null
+  }
+
+  const adjustedStart = Math.max(0, startSeconds - offsetSeconds)
+  const adjustedEnd = Math.max(0, endSeconds - offsetSeconds)
+
+  if (adjustedEnd <= adjustedStart) {
+    return null
+  }
+
+  return `${formatVttTimestamp(adjustedStart)} --> ${formatVttTimestamp(adjustedEnd)}${settings}`
+}
+
+function srtToVtt(srtContent: string, offsetSeconds = 0) {
+  const safeOffsetSeconds = normalizeSubtitleOffset(offsetSeconds)
   const normalized = srtContent
     .replace(/^\uFEFF/, '')
     .replace(/\r\n/g, '\n')
@@ -243,10 +309,13 @@ function srtToVtt(srtContent: string) {
         return null
       }
 
-      lines[timingIndex] = lines[timingIndex].replace(
-        /(\d{2}:\d{2}:\d{2}),(\d{3})/g,
-        '$1.$2'
-      )
+      const timingLine = convertSrtTimingLine(lines[timingIndex], safeOffsetSeconds)
+
+      if (!timingLine) {
+        return null
+      }
+
+      lines[timingIndex] = timingLine
 
       return lines.join('\n').trim()
     })
@@ -594,6 +663,8 @@ function installMoviesMiddleware(server: ViteDevServer | PreviewServer) {
 
       const relativeVideoPath = requestUrl.searchParams.get('video')
       const subtitleIndex = Number(requestUrl.searchParams.get('index') ?? '0')
+      const requestedStart = Number(requestUrl.searchParams.get('start') ?? '0')
+      const startSeconds = Number.isFinite(requestedStart) && requestedStart > 0 ? requestedStart : 0
 
       if (!relativeVideoPath || !Number.isInteger(subtitleIndex) || subtitleIndex < 0) {
         response.writeHead(400)
@@ -629,7 +700,7 @@ function installMoviesMiddleware(server: ViteDevServer | PreviewServer) {
         return
       }
 
-      const vttContent = srtToVtt(fs.readFileSync(subtitlePath, 'utf8'))
+      const vttContent = srtToVtt(fs.readFileSync(subtitlePath, 'utf8'), startSeconds)
       const contentLength = Buffer.byteLength(vttContent, 'utf8')
 
       response.writeHead(200, {

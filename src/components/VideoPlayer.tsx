@@ -90,6 +90,18 @@ function buildTranscodePath(source: string, startSeconds: number) {
   return `${pathname}?${params.toString()}`
 }
 
+function buildSubtitlePath(source: string, startSeconds: number) {
+  if (startSeconds <= 0) {
+    return source
+  }
+
+  const [pathname, query = ''] = source.split('?')
+  const params = new URLSearchParams(query)
+  params.set('start', Math.max(0, startSeconds).toFixed(3))
+
+  return `${pathname}?${params.toString()}`
+}
+
 export function VideoPlayer({
   video,
   autoplay,
@@ -135,6 +147,12 @@ export function VideoPlayer({
   const volumePercent = Math.round((isMuted ? 0 : volume) * 100)
   const infoDuration = video.duration || formatTime(safeDuration)
   const subtitleTracks = video.subtitles ?? []
+  const timedSubtitleTracks = useMemo(() => {
+    return subtitleTracks.map((subtitle) => ({
+      ...subtitle,
+      url: isTranscodedPlayback ? buildSubtitlePath(subtitle.url, transcodeStartTime) : subtitle.url
+    }))
+  }, [isTranscodedPlayback, subtitleTracks, transcodeStartTime])
   const hasSubtitles = subtitleTracks.length > 0
   const closePlayback = useCallback(() => {
     const element = videoRef.current
@@ -181,7 +199,7 @@ export function VideoPlayer({
     })
 
     return () => window.cancelAnimationFrame(frameId)
-  }, [selectedSubtitleIndex, subtitleTracks.length, video.id, videoSource])
+  }, [selectedSubtitleIndex, timedSubtitleTracks.length, video.id, videoSource])
 
   const markActivity = useCallback(() => {
     setControlsVisible(true)
@@ -573,7 +591,7 @@ export function VideoPlayer({
                   }
                 }}
               >
-                {subtitleTracks.map((subtitle) => (
+                {timedSubtitleTracks.map((subtitle) => (
                   <track
                     key={subtitle.url}
                     kind="subtitles"
