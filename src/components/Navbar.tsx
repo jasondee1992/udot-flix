@@ -1,15 +1,17 @@
-import { LoaderCircle, Search } from 'lucide-react'
+import { LoaderCircle, RefreshCw, Search } from 'lucide-react'
 
 interface NavbarProps {
   searchQuery: string
   onSearchChange: (value: string) => void
   isScanning: boolean
+  onRefresh: () => void
 }
 
 export function Navbar({
   searchQuery,
   onSearchChange,
-  isScanning
+  isScanning,
+  onRefresh
 }: NavbarProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-white/10 bg-[#050507]/82 shadow-[0_14px_50px_rgba(0,0,0,0.38)] backdrop-blur-2xl">
@@ -23,13 +25,28 @@ export function Navbar({
             />
           </a>
 
-          <div className="flex min-w-0 items-center gap-3 sm:justify-end">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3 sm:justify-end">
             {isScanning ? (
               <div className="hidden items-center gap-2 rounded-full border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100 md:flex">
                 <LoaderCircle size={14} className="animate-spin" />
                 <span>Scanning</span>
               </div>
             ) : null}
+
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={isScanning}
+              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.075] px-3 text-sm font-semibold text-white shadow-[0_16px_42px_rgba(0,0,0,0.28)] transition hover:border-red-300/35 hover:bg-red-500/12 disabled:cursor-wait disabled:opacity-60 sm:h-11 sm:px-4"
+              aria-label="Refresh library"
+            >
+              {isScanning ? (
+                <LoaderCircle size={16} className="animate-spin" />
+              ) : (
+                <RefreshCw size={16} />
+              )}
+              <span className="hidden md:inline">Refresh Library</span>
+            </button>
 
             <label className="flex min-w-0 flex-1 items-center gap-3 rounded-full border border-white/10 bg-white/[0.075] px-4 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_18px_48px_rgba(0,0,0,0.28)] transition focus-within:border-red-400/45 focus-within:bg-white/[0.11] sm:w-[360px] sm:flex-none lg:w-[420px]">
               <Search size={17} className="shrink-0 text-slate-300" />

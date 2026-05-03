@@ -2,10 +2,38 @@ import { useMemo } from 'react'
 import { EmptyState } from './components/EmptyState'
 import { HeroSection } from './components/HeroSection'
 import { Navbar } from './components/Navbar'
-import { VideoCard } from './components/VideoCard'
 import { VideoPlayer } from './components/VideoPlayer'
 import { VideoRow } from './components/VideoRow'
 import { useVideoLibrary } from './hooks/useVideoLibrary'
+
+function LibrarySkeleton() {
+  return (
+    <section className="space-y-8">
+      {Array.from({ length: 3 }).map((_, rowIndex) => (
+        <div key={rowIndex} className="space-y-4">
+          <div className="space-y-2">
+            <div className="h-3 w-28 animate-pulse rounded-full bg-white/10" />
+            <div className="h-7 w-48 animate-pulse rounded-full bg-white/10" />
+          </div>
+          <div className="grid grid-flow-col auto-cols-[minmax(150px,42vw)] gap-3 overflow-hidden sm:auto-cols-[minmax(178px,210px)] sm:gap-4 lg:auto-cols-[minmax(198px,230px)]">
+            {Array.from({ length: 7 }).map((__, itemIndex) => (
+              <div
+                key={itemIndex}
+                className="overflow-hidden rounded-lg border border-white/8 bg-white/[0.04]"
+              >
+                <div className="aspect-[2/3] animate-pulse bg-white/8" />
+                <div className="space-y-2 p-3">
+                  <div className="h-4 animate-pulse rounded bg-white/10" />
+                  <div className="h-3 w-2/3 animate-pulse rounded bg-white/8" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </section>
+  )
+}
 
 function App() {
   const {
@@ -19,11 +47,12 @@ function App() {
     isScanning,
     lastScanLabel,
     openVideo,
-    recentlyPlayedVideos,
+    refreshLibrary,
     savePlaybackProgress,
     searchQuery,
     selectedFolder,
-    setSearchQuery
+    setSearchQuery,
+    videoSections
   } = useVideoLibrary()
 
   const libraryHeading = useMemo(() => {
@@ -31,40 +60,54 @@ function App() {
   }, [selectedFolder])
 
   const renderLibrary = () => {
+    if (isScanning && !hasAnyVideos) {
+      return <LibrarySkeleton />
+    }
+
     if (!filteredVideos.length) {
       return (
         <EmptyState
           title="No videos match this search."
           description="Try another title, clear the search box, or add supported videos to the movies folder."
+          actionLabel="Refresh Library"
+          onAction={refreshLibrary}
         />
       )
     }
 
     return (
-      <section className="space-y-5">
+      <section className="space-y-8 sm:space-y-10">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-red-300">
-              Streaming now
+              {searchQuery.trim() ? 'Search results' : 'Streaming now'}
             </p>
-            <h2 className="text-2xl font-semibold text-white sm:text-3xl">All Videos</h2>
+            <h2 className="text-2xl font-semibold text-white sm:text-3xl">
+              {searchQuery.trim() ? `Results for "${searchQuery.trim()}"` : 'Browse UFlix'}
+            </h2>
             <p className="max-w-3xl text-sm text-slate-300/80">{libraryHeading}</p>
           </div>
-          <p className="w-fit rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs text-slate-300 shadow-[0_16px_36px_rgba(0,0,0,0.22)]">
-            {filteredVideos.length} item{filteredVideos.length === 1 ? '' : 's'}
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="w-fit rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs text-slate-300 shadow-[0_16px_36px_rgba(0,0,0,0.22)]">
+              {filteredVideos.length} item{filteredVideos.length === 1 ? '' : 's'}
+            </p>
+            <p className="w-fit rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs text-slate-300 shadow-[0_16px_36px_rgba(0,0,0,0.22)]">
+              {lastScanLabel}
+            </p>
+          </div>
         </div>
 
-        <div className="no-scrollbar grid auto-cols-[minmax(260px,340px)] grid-flow-col gap-4 overflow-x-auto pb-5 pt-1 sm:auto-cols-[minmax(300px,380px)]">
-          {filteredVideos.map((video) => (
-            <VideoCard
-              key={video.id}
-              video={video}
-              onPlay={(item) => openVideo(item, true)}
-              onMoreInfo={(item) => openVideo(item, false)}
-            />
-          ))}
-        </div>
+        {videoSections.map((section) => (
+          <VideoRow
+            key={section.key}
+            title={section.title}
+            description={section.description}
+            accent={section.accent}
+            videos={section.videos}
+            onPlay={(video) => openVideo(video, true)}
+            onMoreInfo={(video) => openVideo(video, false)}
+          />
+        ))}
       </section>
     )
   }
@@ -81,6 +124,7 @@ function App() {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         isScanning={isScanning}
+        onRefresh={refreshLibrary}
       />
 
       <main className="relative z-10 pb-12">
@@ -101,25 +145,16 @@ function App() {
             </div>
           ) : null}
 
-          {!hasAnyVideos ? (
+          {!hasAnyVideos && !isScanning ? (
             <EmptyState
               title="No local videos loaded."
               description="Put MP4, MKV, WEBM, MOV, or AVI files inside D:\Projects\udot-flix\movies, then refresh the browser."
+              actionLabel="Refresh Library"
+              onAction={refreshLibrary}
             />
           ) : null}
 
-          {hasAnyVideos ? renderLibrary() : null}
-          {recentlyPlayedVideos.length ? (
-            <section className="mt-9">
-              <VideoRow
-                title="Recently Played"
-                description="Videos opened on this device."
-                videos={recentlyPlayedVideos}
-                onPlay={(video) => openVideo(video, true)}
-                onMoreInfo={(video) => openVideo(video, false)}
-              />
-            </section>
-          ) : null}
+          {hasAnyVideos || isScanning ? renderLibrary() : null}
         </div>
       </main>
 

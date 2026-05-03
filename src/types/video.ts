@@ -23,6 +23,7 @@ export interface VideoItem {
   resumeTime: number
   isFavorite: boolean
   addedAt?: string
+  createdAt?: string
   lastPlayedAt?: string
   fileSize?: string
 }
@@ -32,6 +33,7 @@ export interface VideoSection {
   title: string
   description: string
   videos: VideoItem[]
+  accent?: string
 }
 
 export interface PlaybackState {
@@ -60,6 +62,8 @@ export interface ScannedVideoFile {
   category: string
   duration?: string | null
   durationSeconds?: number | null
+  addedAt?: string | null
+  createdAt?: string | null
   modifiedAt?: string | null
   sizeBytes: number
 }

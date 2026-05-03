@@ -29,6 +29,27 @@ interface VideoPlayerProps {
   ) => void
 }
 
+interface SubtitleCue {
+  start: number
+  end: number
+  text: string
+}
+
+interface WebkitVideoElement extends HTMLVideoElement {
+  webkitEnterFullscreen?: () => void
+  webkitDisplayingFullscreen?: boolean
+  webkitSupportsFullscreen?: boolean
+}
+
+interface WebkitFullscreenElement extends HTMLElement {
+  webkitRequestFullscreen?: () => Promise<void> | void
+}
+
+interface WebkitDocument extends Document {
+  webkitFullscreenElement?: Element | null
+  webkitExitFullscreen?: () => Promise<void> | void
+}
+
 function formatTime(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) {
     return '00:00'
@@ -102,6 +123,85 @@ function buildSubtitlePath(source: string, startSeconds: number) {
   return `${pathname}?${params.toString()}`
 }
 
+function parseVttTimestamp(value: string) {
+  const match = value.trim().match(/^(?:(\d+):)?([0-5]?\d):([0-5]\d)\.(\d{3})$/)
+
+  if (!match) {
+    return null
+  }
+
+  const [, hours = '0', minutes, seconds, milliseconds] = match
+  return (
+    Number(hours) * 3600 +
+    Number(minutes) * 60 +
+    Number(seconds) +
+    Number(milliseconds) / 1000
+  )
+}
+
+function cleanSubtitleText(value: string) {
+  return value
+    .replace(/<[^>]*>/g, '')
+    .replace(/&lrm;|&rlm;/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim()
+}
+
+function parseVttCues(vttContent: string): SubtitleCue[] {
+  return vttContent
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split(/\n{2,}/)
+    .map((block) => {
+      const lines = block
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+
+      if (!lines.length || lines[0] === 'WEBVTT' || lines[0].startsWith('NOTE')) {
+        return null
+      }
+
+      const timingIndex = lines.findIndex((line) => line.includes('-->'))
+
+      if (timingIndex === -1) {
+        return null
+      }
+
+      const [rawStart, rawEnd] = lines[timingIndex].split('-->').map((part) => part.trim().split(/\s+/)[0])
+      const start = parseVttTimestamp(rawStart)
+      const end = parseVttTimestamp(rawEnd)
+      const text = cleanSubtitleText(lines.slice(timingIndex + 1).join('\n'))
+
+      if (start === null || end === null || end <= start || !text) {
+        return null
+      }
+
+      return { start, end, text }
+    })
+    .filter((cue): cue is SubtitleCue => Boolean(cue))
+}
+
+function getFullscreenElement() {
+  const fullscreenDocument = document as WebkitDocument
+  return document.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement ?? null
+}
+
+async function exitFullscreen() {
+  const fullscreenDocument = document as WebkitDocument
+
+  if (document.exitFullscreen) {
+    await document.exitFullscreen()
+    return
+  }
+
+  await fullscreenDocument.webkitExitFullscreen?.()
+}
+
 export function VideoPlayer({
   video,
   autoplay,
@@ -129,6 +229,8 @@ export function VideoPlayer({
   const [isSeekingMedia, setIsSeekingMedia] = useState(false)
   const [isBuffering, setIsBuffering] = useState(Boolean(autoplay))
   const [activityTick, setActivityTick] = useState(0)
+  const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([])
+  const [subtitlePlaybackTime, setSubtitlePlaybackTime] = useState(0)
 
   const isTranscodedPlayback = Boolean(video.playbackPath?.startsWith('/api/transcode'))
   const videoSource = useMemo(() => {
@@ -153,6 +255,15 @@ export function VideoPlayer({
       url: isTranscodedPlayback ? buildSubtitlePath(subtitle.url, transcodeStartTime) : subtitle.url
     }))
   }, [isTranscodedPlayback, subtitleTracks, transcodeStartTime])
+  const selectedSubtitleTrack = selectedSubtitleIndex === null ? null : timedSubtitleTracks[selectedSubtitleIndex] ?? null
+  const activeSubtitleText = useMemo(() => {
+    if (!selectedSubtitleTrack || !subtitleCues.length) {
+      return null
+    }
+
+    const cue = subtitleCues.find((item) => subtitlePlaybackTime >= item.start && subtitlePlaybackTime <= item.end)
+    return cue?.text ?? null
+  }, [selectedSubtitleTrack, subtitleCues, subtitlePlaybackTime])
   const hasSubtitles = subtitleTracks.length > 0
   const closePlayback = useCallback(() => {
     const element = videoRef.current
@@ -183,6 +294,8 @@ export function VideoPlayer({
     setSelectedSubtitleIndex(null)
     setIsSubtitleMenuOpen(false)
     setIsScrubbing(false)
+    setSubtitleCues([])
+    setSubtitlePlaybackTime(0)
   }, [autoplay, isTranscodedPlayback, metadataDuration, video.id, video.resumeTime])
 
   useEffect(() => {
@@ -194,12 +307,42 @@ export function VideoPlayer({
 
     const frameId = window.requestAnimationFrame(() => {
       Array.from(element.textTracks).forEach((track, index) => {
-        track.mode = selectedSubtitleIndex === index ? 'showing' : 'disabled'
+        track.mode = selectedSubtitleIndex === index ? 'hidden' : 'disabled'
       })
     })
 
     return () => window.cancelAnimationFrame(frameId)
   }, [selectedSubtitleIndex, timedSubtitleTracks.length, video.id, videoSource])
+
+  useEffect(() => {
+    if (!selectedSubtitleTrack) {
+      setSubtitleCues([])
+      return
+    }
+
+    const abortController = new AbortController()
+
+    fetch(selectedSubtitleTrack.url, { signal: abortController.signal })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Unable to load subtitles.')
+        }
+
+        return response.text()
+      })
+      .then((content) => {
+        setSubtitleCues(parseVttCues(content))
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return
+        }
+
+        setSubtitleCues([])
+      })
+
+    return () => abortController.abort()
+  }, [selectedSubtitleTrack])
 
   const markActivity = useCallback(() => {
     setControlsVisible(true)
@@ -233,6 +376,7 @@ export function VideoPlayer({
     const boundedTime = Math.min(Math.max(nextTime, 0), safeDuration)
     shouldPlayAfterSeekRef.current = Boolean(element && !element.paused)
     setCurrentTime(boundedTime)
+    setSubtitlePlaybackTime(isTranscodedPlayback ? 0 : boundedTime)
     setIsSeekingMedia(true)
     setIsBuffering(true)
     markActivity()
@@ -307,26 +451,85 @@ export function VideoPlayer({
   }, [isMuted, markActivity, setPlayerVolume])
 
   const toggleFullscreen = useCallback(async () => {
+    const shell = playerShellRef.current as WebkitFullscreenElement | null
+    const videoElement = videoRef.current as WebkitVideoElement | null
     markActivity()
 
-    if (document.fullscreenElement) {
-      await document.exitFullscreen()
+    if (getFullscreenElement()) {
+      await exitFullscreen()
       return
     }
 
-    if (playerShellRef.current) {
-      await playerShellRef.current.requestFullscreen()
+    try {
+      if (shell?.requestFullscreen) {
+        await shell.requestFullscreen()
+        return
+      }
+
+      if (shell?.webkitRequestFullscreen) {
+        await shell.webkitRequestFullscreen()
+        return
+      }
+
+      if (videoElement?.webkitEnterFullscreen) {
+        Array.from(videoElement.textTracks).forEach((track, index) => {
+          track.mode = selectedSubtitleIndex === index ? 'showing' : 'disabled'
+        })
+        videoElement.webkitEnterFullscreen()
+      }
+    } catch {
+      if (videoElement?.webkitEnterFullscreen) {
+        Array.from(videoElement.textTracks).forEach((track, index) => {
+          track.mode = selectedSubtitleIndex === index ? 'showing' : 'disabled'
+        })
+        videoElement.webkitEnterFullscreen()
+      }
     }
-  }, [markActivity])
+  }, [markActivity, selectedSubtitleIndex])
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(document.fullscreenElement === playerShellRef.current)
+      const videoElement = videoRef.current as WebkitVideoElement | null
+      setIsFullscreen(getFullscreenElement() === playerShellRef.current || Boolean(videoElement?.webkitDisplayingFullscreen))
     }
 
     document.addEventListener('fullscreenchange', handleFullscreenChange)
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange)
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange)
+    }
   }, [])
+
+  useEffect(() => {
+    const element = videoRef.current
+
+    if (!element) {
+      return
+    }
+
+    const handleBeginFullscreen = () => {
+      Array.from(element.textTracks).forEach((track, index) => {
+        track.mode = selectedSubtitleIndex === index ? 'showing' : 'disabled'
+      })
+      setIsFullscreen(true)
+    }
+    const handleEndFullscreen = () => {
+      Array.from(element.textTracks).forEach((track, index) => {
+        track.mode = selectedSubtitleIndex === index ? 'hidden' : 'disabled'
+      })
+      setIsFullscreen(false)
+    }
+
+    element.addEventListener('webkitbeginfullscreen', handleBeginFullscreen)
+    element.addEventListener('webkitendfullscreen', handleEndFullscreen)
+
+    return () => {
+      element.removeEventListener('webkitbeginfullscreen', handleBeginFullscreen)
+      element.removeEventListener('webkitendfullscreen', handleEndFullscreen)
+    }
+  }, [selectedSubtitleIndex, videoSource])
 
   useEffect(() => {
     if (!controlsVisible || !isPlaying || isScrubbing || isInfoOpen) {
@@ -411,8 +614,8 @@ export function VideoPlayer({
           break
         case 'Escape':
           event.preventDefault()
-          if (document.fullscreenElement) {
-            void document.exitFullscreen()
+          if (getFullscreenElement()) {
+            void exitFullscreen()
             return
           }
 
@@ -436,10 +639,10 @@ export function VideoPlayer({
   const VolumeIcon = volumeIcon
 
   return (
-    <div className="fixed inset-0 z-50 bg-black">
+    <div className="fixed inset-0 z-50 h-dvh overflow-hidden bg-black">
       <div
         ref={playerShellRef}
-        className={`relative h-full w-full overflow-hidden bg-black ${controlsVisible ? 'cursor-default' : 'cursor-none'}`}
+        className={`relative h-dvh w-full overflow-hidden bg-black ${controlsVisible ? 'cursor-default' : 'cursor-none'}`}
         onMouseMove={markActivity}
         onMouseDown={markActivity}
         onTouchStart={markActivity}
@@ -478,9 +681,10 @@ export function VideoPlayer({
                   setDuration(metadataDuration || elementDuration)
                   setVolume(currentTarget.volume)
                   setIsMuted(currentTarget.muted)
+                  setSubtitlePlaybackTime(currentTarget.currentTime)
 
                   Array.from(currentTarget.textTracks).forEach((track, index) => {
-                    track.mode = selectedSubtitleIndex === index ? 'showing' : 'disabled'
+                    track.mode = selectedSubtitleIndex === index ? 'hidden' : 'disabled'
                   })
 
                   if (isTranscodedPlayback) {
@@ -491,10 +695,12 @@ export function VideoPlayer({
                   if (video.resumeTime > 0 && safeDuration > 0 && video.resumeTime < safeDuration - 5) {
                     currentTarget.currentTime = video.resumeTime
                     setCurrentTime(video.resumeTime)
+                    setSubtitlePlaybackTime(video.resumeTime)
                     return
                   }
 
                   setCurrentTime(currentTarget.currentTime)
+                  setSubtitlePlaybackTime(currentTarget.currentTime)
                 }}
                 onDurationChange={(event) => {
                   const elementDuration = getValidDuration(event.currentTarget.duration)
@@ -537,6 +743,7 @@ export function VideoPlayer({
                   setIsMuted(event.currentTarget.muted || event.currentTarget.volume === 0)
                 }}
                 onSeeking={(event) => {
+                  setSubtitlePlaybackTime(event.currentTarget.currentTime)
                   const nextTime = isTranscodedPlayback
                     ? transcodeStartTime + event.currentTarget.currentTime
                     : event.currentTarget.currentTime
@@ -545,6 +752,7 @@ export function VideoPlayer({
                   setIsBuffering(true)
                 }}
                 onSeeked={(event) => {
+                  setSubtitlePlaybackTime(event.currentTarget.currentTime)
                   const nextTime = isTranscodedPlayback
                     ? transcodeStartTime + event.currentTarget.currentTime
                     : event.currentTarget.currentTime
@@ -556,6 +764,7 @@ export function VideoPlayer({
                   const currentTarget = event.currentTarget
                   const elementDuration = getValidDuration(currentTarget.duration)
                   const progressDuration = safeDuration || elementDuration
+                  setSubtitlePlaybackTime(currentTarget.currentTime)
 
                   if (progressDuration <= 0) {
                     return
@@ -603,6 +812,14 @@ export function VideoPlayer({
               </video>
             </div>
 
+            {activeSubtitleText ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-[clamp(5.75rem,18vh,9rem)] z-10 flex justify-center px-3 sm:bottom-[clamp(6.5rem,16vh,10rem)] sm:px-6">
+                <p className="max-w-[min(92vw,900px)] whitespace-pre-line rounded-md bg-black/62 px-2.5 py-1.5 text-center text-[clamp(1rem,4.2vw,1.75rem)] font-semibold leading-[1.35] text-white shadow-[0_2px_12px_rgba(0,0,0,0.9)] [text-shadow:0_2px_3px_rgba(0,0,0,0.95)] sm:px-4 sm:py-2">
+                  {activeSubtitleText}
+                </p>
+              </div>
+            ) : null}
+
             {isBuffering || isSeekingMedia ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-black/55 px-4 py-3 text-sm font-medium text-white shadow-[0_18px_40px_rgba(0,0,0,0.32)] backdrop-blur-xl">
@@ -626,23 +843,23 @@ export function VideoPlayer({
             ) : null}
 
             <div
-              className={`absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/78 via-black/30 to-transparent px-4 pb-10 pt-4 transition duration-300 sm:px-6 ${controlsVisible || isInfoOpen ? 'opacity-100' : 'pointer-events-none -translate-y-4 opacity-0'}`}
+              className={`absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/78 via-black/30 to-transparent px-3 pb-8 pt-[max(0.75rem,env(safe-area-inset-top))] transition duration-300 sm:px-6 sm:pb-10 ${controlsVisible || isInfoOpen ? 'opacity-100' : 'pointer-events-none -translate-y-4 opacity-0'}`}
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex min-w-0 items-center gap-3">
                   <button
                     type="button"
                     onClick={closePlayback}
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white backdrop-blur-xl transition hover:border-cyan-300/30 hover:bg-cyan-400/10"
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white backdrop-blur-xl transition hover:border-cyan-300/30 hover:bg-cyan-400/10 sm:h-11 sm:w-11"
                     aria-label="Close playback"
                   >
                     <ArrowLeft size={18} />
                   </button>
                   <div className="min-w-0">
-                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-cyan-200/80">
+                    <p className="hidden text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-cyan-200/80 sm:block">
                       Udot Home Cinema
                     </p>
-                    <h2 className="truncate text-lg font-semibold text-white sm:text-2xl">
+                    <h2 className="truncate text-sm font-semibold text-white sm:text-2xl">
                       {video.title}
                     </h2>
                   </div>
@@ -654,7 +871,7 @@ export function VideoPlayer({
                     setIsInfoOpen((previous) => !previous)
                     markActivity()
                   }}
-                  className={`inline-flex h-11 items-center gap-2 rounded-full border px-4 text-sm font-medium text-white backdrop-blur-xl transition ${
+                  className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-3 text-sm font-medium text-white backdrop-blur-xl transition sm:h-11 sm:px-4 ${
                     isInfoOpen
                       ? 'border-cyan-300/35 bg-cyan-400/14'
                       : 'border-white/10 bg-white/8 hover:border-cyan-300/30 hover:bg-cyan-400/10'
@@ -662,13 +879,13 @@ export function VideoPlayer({
                   aria-pressed={isInfoOpen}
                 >
                   <Info size={16} />
-                  <span>Info</span>
+                  <span className="hidden sm:inline">Info</span>
                 </button>
               </div>
             </div>
 
             <div
-              className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/88 via-black/48 to-transparent px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-16 transition duration-300 sm:px-6 ${controlsVisible || isInfoOpen ? 'opacity-100' : 'pointer-events-none translate-y-4 opacity-0'}`}
+              className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 via-black/52 to-transparent px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10 transition duration-300 sm:px-6 sm:pb-[max(1rem,env(safe-area-inset-bottom))] sm:pt-16 ${controlsVisible || isInfoOpen ? 'opacity-100' : 'pointer-events-none translate-y-4 opacity-0'}`}
               onMouseMove={markActivity}
             >
               <div className="mx-auto w-full max-w-7xl space-y-3">
@@ -691,11 +908,11 @@ export function VideoPlayer({
                     onChange={(event) => {
                       seekTo(Number(event.target.value))
                     }}
-                    className="player-range h-1.5 w-full cursor-pointer appearance-none rounded-full"
+                    className="player-range h-2 w-full cursor-pointer appearance-none rounded-full sm:h-1.5"
                     style={buildSliderBackground(progressPercent, 'rgba(34, 211, 238, 0.98)')}
                     aria-label="Scrub video"
                   />
-                  <div className="flex items-center justify-between text-sm font-medium tabular-nums text-slate-100">
+                  <div className="flex items-center justify-between text-xs font-medium tabular-nums text-slate-100 sm:text-sm">
                     <span>{formatTime(clampedCurrentTime)}</span>
                     <span>{formatTime(safeDuration)}</span>
                   </div>
@@ -706,7 +923,7 @@ export function VideoPlayer({
                     <button
                       type="button"
                       onClick={() => seekBy(-10)}
-                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white backdrop-blur-xl transition hover:border-cyan-300/30 hover:bg-cyan-400/10"
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white backdrop-blur-xl transition hover:border-cyan-300/30 hover:bg-cyan-400/10 sm:h-11 sm:w-11"
                       aria-label="Back 10 seconds"
                     >
                       <RotateCcw size={18} />
@@ -714,7 +931,7 @@ export function VideoPlayer({
                     <button
                       type="button"
                       onClick={togglePlayback}
-                      className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-white text-slate-950 shadow-[0_18px_36px_rgba(0,0,0,0.28)] transition hover:scale-105"
+                      className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white text-slate-950 shadow-[0_18px_36px_rgba(0,0,0,0.28)] transition hover:scale-105 sm:h-12 sm:w-12"
                       aria-label={isPlaying ? 'Pause video' : 'Play video'}
                     >
                       {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
@@ -722,13 +939,13 @@ export function VideoPlayer({
                     <button
                       type="button"
                       onClick={() => seekBy(10)}
-                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white backdrop-blur-xl transition hover:border-cyan-300/30 hover:bg-cyan-400/10"
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white backdrop-blur-xl transition hover:border-cyan-300/30 hover:bg-cyan-400/10 sm:h-11 sm:w-11"
                       aria-label="Forward 10 seconds"
                     >
                       <RotateCw size={18} />
                     </button>
 
-                    <div className="ml-0 flex items-center gap-2 rounded-full border border-white/10 bg-white/8 px-3 py-2 backdrop-blur-xl sm:ml-2">
+                    <div className="ml-0 flex items-center gap-2 rounded-full border border-white/10 bg-white/8 px-2 py-1.5 backdrop-blur-xl sm:ml-2 sm:px-3 sm:py-2">
                       <button
                         type="button"
                         onClick={toggleMute}
@@ -747,14 +964,14 @@ export function VideoPlayer({
                           setPlayerVolume(Number(event.target.value))
                           markActivity()
                         }}
-                        className="player-volume-range h-1.5 w-24 cursor-pointer appearance-none rounded-full sm:w-28"
+                        className="player-volume-range hidden h-1.5 w-24 cursor-pointer appearance-none rounded-full sm:block sm:w-28"
                         style={buildSliderBackground(volumePercent, 'rgba(255,255,255,0.95)')}
                         aria-label="Adjust volume"
                       />
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-3 sm:justify-end">
+                  <div className="flex items-center justify-between gap-2 sm:gap-3 sm:justify-end">
                     {hasSubtitles ? (
                       <div className="relative">
                         <button
@@ -763,7 +980,7 @@ export function VideoPlayer({
                             setIsSubtitleMenuOpen((previous) => !previous)
                             markActivity()
                           }}
-                          className={`inline-flex h-11 items-center gap-2 rounded-full border px-4 text-sm font-medium text-white backdrop-blur-xl transition ${
+                          className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-sm font-medium text-white backdrop-blur-xl transition sm:h-11 sm:px-4 ${
                             selectedSubtitleIndex !== null
                               ? 'border-red-300/45 bg-red-500/18'
                               : 'border-white/10 bg-white/8 hover:border-red-300/35 hover:bg-red-500/12'
@@ -773,11 +990,11 @@ export function VideoPlayer({
                           aria-label="Subtitle options"
                         >
                           <Captions size={17} />
-                          <span>CC</span>
+                          <span className="hidden min-[380px]:inline">CC</span>
                         </button>
 
                         {isSubtitleMenuOpen ? (
-                          <div className="absolute bottom-14 right-0 w-48 overflow-hidden rounded-2xl border border-white/10 bg-black/82 p-1.5 text-sm text-white shadow-[0_22px_60px_rgba(0,0,0,0.48)] backdrop-blur-2xl">
+                          <div className="absolute bottom-12 right-0 w-44 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border border-white/10 bg-black/88 p-1.5 text-sm text-white shadow-[0_22px_60px_rgba(0,0,0,0.48)] backdrop-blur-2xl sm:bottom-14 sm:w-48">
                             <button
                               type="button"
                               onClick={() => {
@@ -821,7 +1038,7 @@ export function VideoPlayer({
                         setIsInfoOpen((previous) => !previous)
                         markActivity()
                       }}
-                      className={`inline-flex h-11 items-center gap-2 rounded-full border px-4 text-sm font-medium text-white backdrop-blur-xl transition ${
+                      className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-sm font-medium text-white backdrop-blur-xl transition sm:h-11 sm:px-4 ${
                         isInfoOpen
                           ? 'border-cyan-300/35 bg-cyan-400/14'
                           : 'border-white/10 bg-white/8 hover:border-cyan-300/30 hover:bg-cyan-400/10'
@@ -829,13 +1046,13 @@ export function VideoPlayer({
                       aria-pressed={isInfoOpen}
                     >
                       <Info size={16} />
-                      <span>Info</span>
+                      <span className="hidden min-[380px]:inline">Info</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => void toggleFullscreen()}
-                      className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white backdrop-blur-xl transition hover:border-cyan-300/30 hover:bg-cyan-400/10"
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white backdrop-blur-xl transition hover:border-cyan-300/30 hover:bg-cyan-400/10 sm:h-11 sm:w-11"
                       aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
                     >
                       {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}

@@ -40,6 +40,26 @@ interface SubtitleTrack {
   url: string
 }
 
+interface ScannedVideo {
+  id: string
+  fileName: string
+  title: string
+  filePath: string
+  playbackPath: string
+  hasSubtitle: boolean
+  subtitleUrl: string | null
+  subtitles: SubtitleTrack[]
+  posterPath: string | null
+  extension: string
+  category: string
+  duration: string | null
+  durationSeconds: number | null
+  addedAt: string
+  createdAt: string
+  modifiedAt: string
+  sizeBytes: number
+}
+
 function isInside(basePath: string, candidatePath: string) {
   const relativePath = path.relative(basePath, candidatePath)
   return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
@@ -73,6 +93,29 @@ function formatDurationLabel(totalSeconds: number) {
   }
 
   return [minutes, seconds].map((value) => value.toString().padStart(2, '0')).join(':')
+}
+
+function getFileAddedAt(stats: fs.Stats) {
+  const timestamp =
+    [stats.birthtimeMs, stats.ctimeMs, stats.mtimeMs]
+      .find((value) => Number.isFinite(value) && value > 0) ?? stats.mtimeMs
+
+  return new Date(timestamp).toISOString()
+}
+
+function getFileCreatedAt(stats: fs.Stats) {
+  const timestamp =
+    Number.isFinite(stats.birthtimeMs) && stats.birthtimeMs > 0
+      ? stats.birthtimeMs
+      : Number.isFinite(stats.ctimeMs) && stats.ctimeMs > 0
+        ? stats.ctimeMs
+        : stats.mtimeMs
+
+  return new Date(timestamp).toISOString()
+}
+
+function getFileModifiedAt(stats: fs.Stats) {
+  return new Date(stats.mtimeMs).toISOString()
 }
 
 function readMediaMetadata(filePath: string): MediaMetadata {
@@ -329,23 +372,7 @@ function scanMoviesFolder(moviesRoot: string) {
     return []
   }
 
-  const videos: Array<{
-    id: string
-    fileName: string
-    title: string
-    filePath: string
-    playbackPath: string
-    hasSubtitle: boolean
-    subtitleUrl: string | null
-    subtitles: SubtitleTrack[]
-    posterPath: string | null
-    extension: string
-    category: string
-    duration: string | null
-    durationSeconds: number | null
-    modifiedAt: string
-    sizeBytes: number
-  }> = []
+  const videos: ScannedVideo[] = []
 
   const walk = (folderPath: string) => {
     for (const entry of fs.readdirSync(folderPath, { withFileTypes: true })) {
@@ -367,6 +394,9 @@ function scanMoviesFolder(moviesRoot: string) {
       }
 
       const stats = fs.statSync(entryPath)
+      const addedAt = getFileAddedAt(stats)
+      const createdAt = getFileCreatedAt(stats)
+      const modifiedAt = getFileModifiedAt(stats)
       const webPath = toWebPath(moviesRoot, entryPath)
       const posterPath = findPosterPath(entryPath)
       const mediaMetadata = readMediaMetadata(entryPath)
@@ -389,7 +419,9 @@ function scanMoviesFolder(moviesRoot: string) {
         category: '',
         duration: mediaMetadata.durationLabel,
         durationSeconds: mediaMetadata.durationSeconds,
-        modifiedAt: stats.mtime.toISOString(),
+        addedAt,
+        createdAt,
+        modifiedAt,
         sizeBytes: stats.size
       })
     }
@@ -398,6 +430,50 @@ function scanMoviesFolder(moviesRoot: string) {
   walk(moviesRoot)
 
   return videos.sort((left, right) => right.fileName.localeCompare(left.fileName))
+}
+
+function buildMoviesSignature(moviesRoot: string) {
+  if (!fs.existsSync(moviesRoot)) {
+    return 'missing'
+  }
+
+  const entries: string[] = []
+
+  const walk = (folderPath: string) => {
+    for (const entry of fs.readdirSync(folderPath, { withFileTypes: true })) {
+      const entryPath = path.join(folderPath, entry.name)
+
+      if (entry.isDirectory()) {
+        walk(entryPath)
+        continue
+      }
+
+      if (!entry.isFile()) {
+        continue
+      }
+
+      const extension = path.extname(entry.name).toLowerCase()
+
+      if (
+        !supportedMediaExtensions.has(extension) &&
+        extension !== '.srt'
+      ) {
+        continue
+      }
+
+      const stats = fs.statSync(entryPath)
+      entries.push([
+        path.relative(moviesRoot, entryPath),
+        stats.size,
+        Math.round(stats.birthtimeMs),
+        Math.round(stats.ctimeMs),
+        Math.round(stats.mtimeMs)
+      ].join(':'))
+    }
+  }
+
+  walk(moviesRoot)
+  return entries.sort().join('|')
 }
 
 function parseRangeHeader(range: string | undefined, fileSize: number): ByteRange | null {
@@ -630,6 +706,22 @@ function streamTranscodedVideo(
 
 function installMoviesMiddleware(server: ViteDevServer | PreviewServer) {
   const moviesRoot = path.resolve(process.cwd(), 'movies')
+  let scanCache: {
+    signature: string
+    videos: ScannedVideo[]
+  } | null = null
+
+  const getScannedMovies = () => {
+    const signature = buildMoviesSignature(moviesRoot)
+
+    if (scanCache?.signature === signature) {
+      return scanCache.videos
+    }
+
+    const videos = scanMoviesFolder(moviesRoot)
+    scanCache = { signature, videos }
+    return videos
+  }
 
   server.middlewares.use((request, response, next) => {
     if (!request.url) {
@@ -648,7 +740,7 @@ function installMoviesMiddleware(server: ViteDevServer | PreviewServer) {
     if (requestUrl.pathname === '/api/videos') {
       response.setHeader('Content-Type', 'application/json')
       response.setHeader('Cache-Control', 'no-store')
-      response.end(JSON.stringify(scanMoviesFolder(moviesRoot)))
+      response.end(JSON.stringify(getScannedMovies()))
       return
     }
 

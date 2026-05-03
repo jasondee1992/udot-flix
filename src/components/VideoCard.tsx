@@ -41,8 +41,11 @@ export function VideoCard({ video, onPlay, onMoreInfo }: VideoCardProps) {
   }, [shouldLoadPreview])
 
   return (
-    <article className="group overflow-hidden rounded-lg border border-white/8 bg-[#111114] shadow-[0_18px_44px_rgba(0,0,0,0.42)] transition duration-300 hover:z-10 hover:scale-[1.045] hover:border-red-400/35 hover:shadow-[0_26px_70px_rgba(0,0,0,0.72)]">
-      <div ref={previewRef} className="relative aspect-video overflow-hidden bg-[#0b0b0f]">
+    <article
+      className="group snap-start cursor-pointer overflow-hidden rounded-lg border border-white/8 bg-[#111114] shadow-[0_18px_44px_rgba(0,0,0,0.42)] transition duration-300 md:hover:z-10 md:hover:-translate-y-1 md:hover:scale-[1.035] md:hover:border-red-400/35 md:hover:shadow-[0_26px_70px_rgba(0,0,0,0.72)]"
+      onClick={() => onPlay(video)}
+    >
+      <div ref={previewRef} className="relative aspect-[2/3] overflow-hidden bg-[#0b0b0f]">
         {imageSource ? (
           <img
             src={imageSource}
@@ -76,20 +79,35 @@ export function VideoCard({ video, onPlay, onMoreInfo }: VideoCardProps) {
           </span>
         </div>
 
-        <div className="absolute inset-0 flex translate-y-4 flex-col justify-end bg-gradient-to-t from-black via-black/60 to-transparent px-4 pb-4 opacity-0 transition duration-300 group-hover:translate-y-0 group-hover:opacity-100">
+        {video.progress > 0 ? (
+          <div className="absolute inset-x-0 bottom-0 h-1 bg-black/45">
+            <div
+              className="h-full bg-red-600"
+              style={{ width: `${video.progress}%` }}
+            />
+          </div>
+        ) : null}
+
+        <div className="absolute inset-0 flex translate-y-4 flex-col justify-end bg-gradient-to-t from-black via-black/55 to-transparent px-3 pb-3 opacity-0 transition duration-300 md:group-hover:translate-y-0 md:group-hover:opacity-100 sm:px-4 sm:pb-4">
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onPlay(video)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white text-black shadow-[0_10px_28px_rgba(255,255,255,0.18)] transition hover:scale-110"
+              onClick={(event) => {
+                event.stopPropagation()
+                onPlay(video)
+              }}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white text-black shadow-[0_10px_28px_rgba(255,255,255,0.18)] transition hover:scale-110 sm:h-10 sm:w-10"
               aria-label={`Play ${video.title}`}
             >
               <Play size={16} fill="currentColor" />
             </button>
             <button
               type="button"
-              onClick={() => onMoreInfo(video)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/12 text-white backdrop-blur transition hover:scale-110 hover:bg-white/20"
+              onClick={(event) => {
+                event.stopPropagation()
+                onMoreInfo(video)
+              }}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/12 text-white backdrop-blur transition hover:scale-110 hover:bg-white/20 sm:h-10 sm:w-10"
               aria-label={`More information for ${video.title}`}
             >
               <Info size={16} />
@@ -101,14 +119,14 @@ export function VideoCard({ video, onPlay, onMoreInfo }: VideoCardProps) {
         </div>
       </div>
 
-      <div className="space-y-3 p-3.5">
+      <div className="space-y-2.5 p-3 sm:space-y-3 sm:p-3.5">
         <div>
-          <h4 className="line-clamp-2 text-sm font-semibold leading-5 text-white sm:text-base">
+          <h4 className="line-clamp-2 text-sm font-semibold leading-5 text-white">
             {video.title}
           </h4>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300/75">
+        <div className="flex flex-wrap items-center gap-1.5 text-[0.7rem] text-slate-300/75 sm:gap-2 sm:text-xs">
           <span>{video.year}</span>
           {video.duration ? (
             <>
@@ -120,9 +138,9 @@ export function VideoCard({ video, onPlay, onMoreInfo }: VideoCardProps) {
 
         {video.progress > 0 ? (
           <div className="space-y-2">
-            <div className="h-1.5 overflow-hidden rounded-full bg-white/8">
+            <div className="h-1 overflow-hidden rounded-full bg-white/8 sm:h-1.5">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500"
+                className="h-full rounded-full bg-red-600"
                 style={{ width: `${video.progress}%` }}
               />
             </div>
